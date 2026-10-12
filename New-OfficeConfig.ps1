@@ -64,6 +64,14 @@ $xml = @"
 
 if (-not (Test-Path $Zielordner)) { New-Item -ItemType Directory -Path $Zielordner | Out-Null }
 $pfad = Join-Path $Zielordner "configuration.xml"
+
+# Vorhandene configuration.xml nicht ueberschreiben, sondern vorher sichern
+if (Test-Path $pfad) {
+    $backup = Join-Path $Zielordner ("configuration_backup_{0}.xml" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+    Copy-Item $pfad $backup
+    Write-Host ""
+    Write-Host "Alte configuration.xml gesichert: $backup" -ForegroundColor Yellow
+}
 $xml | Set-Content -Path $pfad -Encoding UTF8
 
 Write-Host ""
