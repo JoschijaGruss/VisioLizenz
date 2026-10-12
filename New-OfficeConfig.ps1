@@ -14,22 +14,23 @@
 #>
 param(
     [string]$Zielordner = "C:\VisioProjectSetup",
-    [string]$Sprache    = "de-de"
+    [string]$Sprache    = "de-de",
+    [string]$Firma      = "GHG St. Gallen",
+    # SemiAnnual = Halbjaehrlich Enterprise-Kanal (wie in der Anleitung / config.office.com)
+    [string]$Kanal      = "SemiAnnual"
 )
 
 $ErrorActionPreference = "Stop"
 
 # ---- Produktkatalog: hier spaeter weitere Produkte/Versionen ergaenzen ----
-# Channel: LTSC-Volumenlizenzprodukte benoetigen den passenden PerpetualVL-Kanal
-# (so erzeugt es auch config.office.com fuer diese Produkte).
 $Produkte = [ordered]@{
     "Visio"   = [ordered]@{
-        "2024 Standard" = @{ Id = "VisioStd2024Volume";   Channel = "PerpetualVL2024"; Name = "Visio LTSC Standard 2024" }
-        "2021 Standard" = @{ Id = "VisioStd2021Volume";   Channel = "PerpetualVL2021"; Name = "Visio LTSC Standard 2021" }
+        "2024 Standard" = @{ Id = "VisioStd2024Volume";   Name = "Visio LTSC Standard 2024" }
+        "2021 Standard" = @{ Id = "VisioStd2021Volume";   Name = "Visio LTSC Standard 2021" }
     }
     "Project" = [ordered]@{
-        "2024 Standard" = @{ Id = "ProjectStd2024Volume"; Channel = "PerpetualVL2024"; Name = "Project Standard 2024" }
-        "2021 Standard" = @{ Id = "ProjectStd2021Volume"; Channel = "PerpetualVL2021"; Name = "Project Standard 2021" }
+        "2024 Standard" = @{ Id = "ProjectStd2024Volume"; Name = "Project Standard 2024" }
+        "2021 Standard" = @{ Id = "ProjectStd2021Volume"; Name = "Project Standard 2021" }
     }
 }
 
@@ -65,9 +66,10 @@ while ($true) {
 }
 
 # ---- 4. configuration.xml erzeugen ----
+$configId = [guid]::NewGuid().ToString()
 $xml = @"
-<Configuration>
-  <Add OfficeClientEdition="64" Channel="$($auswahl.Channel)">
+<Configuration ID="$configId">
+  <Add OfficeClientEdition="64" Channel="$Kanal">
     <Product ID="$($auswahl.Id)" PIDKEY="$key">
       <Language ID="$Sprache" />
       <ExcludeApp ID="OneDrive" />
@@ -79,6 +81,9 @@ $xml = @"
   <Property Name="SCLCacheOverride" Value="0" />
   <Property Name="AUTOACTIVATE" Value="1" />
   <Updates Enabled="TRUE" />
+  <AppSettings>
+    <Setup Name="Company" Value="$Firma" />
+  </AppSettings>
   <Display Level="Full" AcceptEULA="TRUE" />
 </Configuration>
 "@
@@ -90,7 +95,7 @@ $xml | Set-Content -Path $pfad -Encoding UTF8
 Write-Host ""
 Write-Host "Fertig: $pfad" -ForegroundColor Green
 Write-Host "Produkt : $($auswahl.Name) ($($auswahl.Id))"
-Write-Host "Kanal   : $($auswahl.Channel)"
+Write-Host "Kanal   : $Kanal"
 Write-Host "Sprache : $Sprache"
 Write-Host ""
 Get-Content $pfad
