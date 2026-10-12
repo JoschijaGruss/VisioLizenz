@@ -1,38 +1,16 @@
 <#
 .SYNOPSIS
-    Erstellt die configuration.xml (Schritt 5 der Anleitung) fuer Visio / Project
-    mit MAK-Lizenz - ohne das Office-Anpassungstool im Browser.
+    Erstellt direkt die configuration.xml fuer Visio Standard / Project Standard (MAK).
 
-.BESCHREIBUNG
-    Fragt Produkt, Version und MAK-Schluessel ab und schreibt die configuration.xml
-    in den Zielordner (Standard: C:\VisioProjectSetup).
-    Weitere Produkte/Versionen koennen unten in $Produkte ergaenzt werden.
+    Fest eingestellt: 64-Bit, SemiAnnual, Deutsch, ohne OneDrive, Firma "GHG St. Gallen".
+    Abgefragt wird nur: Produkt (Visio/Project), Jahr (2024/2021) und MAK-Schluessel.
 
 .BEISPIEL
     powershell -ExecutionPolicy Bypass -File .\New-OfficeConfig.ps1
-    powershell -ExecutionPolicy Bypass -File .\New-OfficeConfig.ps1 -Zielordner D:\Test
 #>
-param(
-    [string]$Zielordner = "C:\VisioProjectSetup",
-    [string]$Sprache    = "de-de",
-    [string]$Firma      = "GHG St. Gallen",
-    # SemiAnnual = Halbjaehrlich Enterprise-Kanal (wie in der Anleitung / config.office.com)
-    [string]$Kanal      = "SemiAnnual"
-)
 
 $ErrorActionPreference = "Stop"
-
-# ---- Produktkatalog: hier spaeter weitere Produkte/Versionen ergaenzen ----
-$Produkte = [ordered]@{
-    "Visio"   = [ordered]@{
-        "2024 Standard" = @{ Id = "VisioStd2024Volume";   Name = "Visio LTSC Standard 2024" }
-        "2021 Standard" = @{ Id = "VisioStd2021Volume";   Name = "Visio LTSC Standard 2021" }
-    }
-    "Project" = [ordered]@{
-        "2024 Standard" = @{ Id = "ProjectStd2024Volume"; Name = "Project Standard 2024" }
-        "2021 Standard" = @{ Id = "ProjectStd2021Volume"; Name = "Project Standard 2021" }
-    }
-}
+$Zielordner = "C:\VisioProjectSetup"
 
 function Select-Option([string]$Titel, [string[]]$Optionen) {
     Write-Host ""
@@ -50,14 +28,9 @@ function Select-Option([string]$Titel, [string[]]$Optionen) {
     }
 }
 
-# ---- 1. Produkt ----
-$produkt = Select-Option "Welches Produkt?" @($Produkte.Keys)
+$produkt = Select-Option "Welches Produkt?" @("Visio", "Project")
+$jahr    = Select-Option "Welches Jahr?"    @("2024", "2021")
 
-# ---- 2. Version ----
-$version = Select-Option "Welche Version von $produkt?" @($Produkte[$produkt].Keys)
-$auswahl = $Produkte[$produkt][$version]
-
-# ---- 3. MAK-Schluessel ----
 Write-Host ""
 while ($true) {
     $key = (Read-Host "MAK-Schluessel eingeben (XXXXX-XXXXX-XXXXX-XXXXX-XXXXX)").Trim().ToUpper()
@@ -65,13 +38,14 @@ while ($true) {
     Write-Host "Format ungueltig, bitte erneut eingeben." -ForegroundColor Yellow
 }
 
-# ---- 4. configuration.xml erzeugen ----
-$configId = [guid]::NewGuid().ToString()
+$productId = "${produkt}Std${jahr}Volume"   # z.B. VisioStd2024Volume / ProjectStd2021Volume
+$configId  = [guid]::NewGuid().ToString()
+
 $xml = @"
 <Configuration ID="$configId">
-  <Add OfficeClientEdition="64" Channel="$Kanal">
-    <Product ID="$($auswahl.Id)" PIDKEY="$key">
-      <Language ID="$Sprache" />
+  <Add OfficeClientEdition="64" Channel="SemiAnnual">
+    <Product ID="$productId" PIDKEY="$key">
+      <Language ID="de-de" />
       <ExcludeApp ID="OneDrive" />
     </Product>
   </Add>
@@ -82,7 +56,7 @@ $xml = @"
   <Property Name="AUTOACTIVATE" Value="1" />
   <Updates Enabled="TRUE" />
   <AppSettings>
-    <Setup Name="Company" Value="$Firma" />
+    <Setup Name="Company" Value="GHG St. Gallen" />
   </AppSettings>
   <Display Level="Full" AcceptEULA="TRUE" />
 </Configuration>
@@ -93,9 +67,6 @@ $pfad = Join-Path $Zielordner "configuration.xml"
 $xml | Set-Content -Path $pfad -Encoding UTF8
 
 Write-Host ""
-Write-Host "Fertig: $pfad" -ForegroundColor Green
-Write-Host "Produkt : $($auswahl.Name) ($($auswahl.Id))"
-Write-Host "Kanal   : $Kanal"
-Write-Host "Sprache : $Sprache"
+Write-Host "Fertig: $pfad  ($productId)" -ForegroundColor Green
 Write-Host ""
 Get-Content $pfad
