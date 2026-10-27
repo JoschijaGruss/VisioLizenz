@@ -106,3 +106,8 @@ Erst `/configure` installiert und aktiviert mit dem MAK (zählt als eine Aktivie
 
 Die `configuration.xml` enthält den MAK-Schlüssel im Klartext. Nicht ins Repository
 einchecken und nicht weitergeben (`configuration*.xml` ist in `.gitignore` eingetragen).
+
+## Weitere Tools in diesem Repository
+
+- [`VPN-Notfall/`](VPN-Notfall/README.md) – Always On VPN reparieren (Workaround für die
+  Windows-11-Updates ab September 2026) und Netzlaufwerke/Drucker robust neu verbinden.
