@@ -16,12 +16,9 @@ exit /b
 # Die Laufwerke werden IMMER fuer den angemeldeten Benutzer verbunden - auch wenn das
 # Programm mit einem Admin-Konto gestartet wurde (dann ueber eine kurzzeitige Aufgabe).
 #
-# "Dauerloesung einrichten" legt geplante Aufgaben an (\GHG\VPN-Fix *), die das automatisch
-# bei Systemstart, Anmeldung, VPN-Aufbau und alle 15 Minuten machen - auch nach Neustart.
-# Intune: Datei in VPN-Hilfe.ps1 umbenennen und als Plattformskript verteilen (als SYSTEM,
-# 64-Bit) - richtet dann die Dauerloesung ohne Fenster ein.
+# Damit es gar nicht erst passiert: einmal VPN-Dauerloesung.cmd ausfuehren (geplante Aufgaben).
 #
-# Logs: %LOCALAPPDATA%\GHG\Logs\VPN-Fix.log, C:\ProgramData\GHG\VPN-Fix\Logs\System.log
+# Log: %LOCALAPPDATA%\GHG\Logs\VPN-Fix.log
 ###########################################################################################
 
 ###########################################################################################
@@ -52,17 +49,17 @@ $Einstellungen = [ordered]@{
     )
 }
 
-$Ordner   = Join-Path $env:ProgramData 'GHG\VPN-Fix'
+$Ordner   = Join-Path $env:ProgramData 'GHG\VPN-Hilfe'
 $TaskPath = '\GHG\'
 
 ###########################################################################################
-# Skript fuer die geplanten Aufgaben (wird nach C:\ProgramData\GHG\VPN-Fix\VPN-Fix.ps1
-# geschrieben). Das Fenster benutzt dieselben Funktionen.
+# Funktionen fuer das Fenster. Laeuft das Fenster als Admin, wird das Skript nach
+# C:\ProgramData\GHG\VPN-Hilfe\VPN-Fix.ps1 geschrieben und als angemeldeter Benutzer ausgefuehrt.
 ###########################################################################################
 
 $WorkerCode = @'
 <#
-    GHG VPN-Fix - ausgefuehrt von den geplanten Aufgaben \GHG\VPN-Fix * (eingerichtet durch VPN-Hilfe.cmd)
+    GHG VPN-Hilfe - Schritte des Fensters VPN-Hilfe.cmd (als angemeldeter Benutzer)
     -Modus System        VPN-Profile "alle Benutzer" (ProgramData) auf festes Protokoll
     -Modus Pruefung      eigenes VPN-Profil korrigieren, Laufwerke pruefen (nur wenn Firmennetz da)
     -Modus Benutzer      eigenes VPN-Profil, auf Firmennetz warten, Laufwerke, Intune-Zuordnung, Drucker
@@ -74,7 +71,7 @@ param(
     [switch]$NurLaden
 )
 
-$Ordner      = Join-Path $env:ProgramData 'GHG\VPN-Fix'
+$Ordner      = Join-Path $env:ProgramData 'GHG\VPN-Hilfe'
 $PbkAlle     = Join-Path $env:ProgramData 'Microsoft\Network\Connections\Pbk\rasphone.pbk'
 $PbkBenutzer = Join-Path $env:APPDATA 'Microsoft\Network\Connections\Pbk\rasphone.pbk'
 
@@ -417,15 +414,6 @@ function Test-Admin {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function New-EreignisTrigger([string]$Log, [string]$Quelle, [int]$Id, [string]$Verzoegerung = 'PT5S') {
-    $klasse = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler
-    $trigger = New-CimInstance -CimClass $klasse -ClientOnly
-    $trigger.Enabled = $true
-    $trigger.Delay = $Verzoegerung
-    $trigger.Subscription = "<QueryList><Query Id=`"0`" Path=`"$Log`"><Select Path=`"$Log`">*[System[Provider[@Name='$Quelle'] and EventID=$Id]]</Select></Query></QueryList>"
-    $trigger
-}
-
 function New-WorkerAktion([string]$Modus, [switch]$System) {
     $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $argumente = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $Ordner 'VPN-Fix.ps1')`" -Modus $Modus"
@@ -450,61 +438,15 @@ function Write-VpnFixDateien {
     $Einstellungen | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Ordner 'Einstellungen.json') -Encoding ASCII
 }
 
-function Install-VpnFix {
-    Write-VpnFixDateien
-    $einstellungen = New-AufgabenEinstellungen
-    $benutzer = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
-    $alle15 = (New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 15))
-
-    # SYSTEM: VPN-Profile "alle Benutzer" - Systemstart, alle 15 Minuten, VPN-Fehler
-    Register-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix System' -Force -Action (New-WorkerAktion System -System) `
-        -Trigger @((New-ScheduledTaskTrigger -AtStartup), $alle15, (New-EreignisTrigger 'Application' 'RasClient' 20227)) `
-        -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest) `
-        -Settings $einstellungen | Out-Null
-
-    # Benutzer: Anmeldung, VPN verbunden, Netzwerkwechsel -> VPN-Profil, Laufwerke, Intune-Zuordnung, Drucker
-    $anmeldung = New-ScheduledTaskTrigger -AtLogOn
-    $anmeldung.Delay = 'PT15S'
-    Register-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix Benutzer' -Force -Action (New-WorkerAktion Benutzer) `
-        -Trigger @($anmeldung, (New-EreignisTrigger 'Application' 'RasClient' 20225 'PT10S'),
-            (New-EreignisTrigger 'Microsoft-Windows-NetworkProfile/Operational' 'Microsoft-Windows-NetworkProfile' 10000 'PT15S')) `
-        -Principal $benutzer -Settings $einstellungen | Out-Null
-
-    # Benutzer: alle 15 Minuten und bei VPN-Fehler -> VPN-Profil erneut korrigieren, Laufwerke pruefen
-    $pruefung = New-ScheduledTaskTrigger -AtLogOn
-    $pruefung.Repetition = $alle15.Repetition
-    Register-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix Pruefung' -Force -Action (New-WorkerAktion Pruefung) `
-        -Trigger @($pruefung, (New-EreignisTrigger 'Application' 'RasClient' 20227)) `
-        -Principal $benutzer -Settings $einstellungen | Out-Null
-
-    Start-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix System' -ErrorAction SilentlyContinue
-    Write-Log "Dauerloesung eingerichtet ($Ordner, Aufgaben $($TaskPath)VPN-Fix *)."
-}
-
-function Uninstall-VpnFix {
-    Get-ScheduledTask -TaskPath $TaskPath -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'VPN-Fix*' } |
-        Unregister-ScheduledTask -Confirm:$false
-    Remove-Item -LiteralPath $Ordner -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log 'Dauerloesung entfernt. VPN-Profile bleiben auf dem festen Protokoll (Original: rasphone.pbk.vor-VPN-Fix).'
-}
-
 ###########################################################################################
-# Start ohne Fenster: Intune (SYSTEM) und Teilschritte mit Adminrechten
+# Start ohne Fenster: Teilschritt mit Adminrechten
 ###########################################################################################
-
-$IstSystem = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18'
-if ($IstSystem) {
-    try { Install-VpnFix; exit 0 }
-    catch { Write-Output "Einrichtung fehlgeschlagen: $($_.Exception.Message)"; exit 1 }
-}
 
 if ($env:VPN_HILFE_AKTION) {
     $ok = $true
     try {
         switch ($env:VPN_HILFE_AKTION) {
-            'PbkAlle'    { $null = Repair-Pbk $PbkAlle }
-            'Einrichten' { Install-VpnFix }
-            'Entfernen'  { Uninstall-VpnFix }
+            'PbkAlle' { $null = Repair-Pbk $PbkAlle }
         }
     }
     catch { Write-Log "FEHLER: $($_.Exception.Message)"; $ok = $false }
@@ -603,11 +545,9 @@ $txtAusgabe.Location = New-Object System.Drawing.Point(16, 294)
 $txtAusgabe.Size = New-Object System.Drawing.Size(592, 214)
 $form.Controls.Add($txtAusgabe)
 
-$btnStatus = New-Knopf 'Aktualisieren' 16 518 120 30
-$btnDauer = New-Knopf 'Dauerloesung einrichten' 144 518 190 30
-$btnEntfernen = New-Knopf 'Dauerloesung entfernen' 342 518 180 30
-$btnLog = New-Knopf 'Logs' 530 518 78 30
-$Knoepfe = @($btnVpn, $btnLaufwerke, $btnStatus, $btnDauer, $btnEntfernen, $btnLog)
+$btnStatus = New-Knopf 'Aktualisieren' 16 518 140 30
+$btnLog = New-Knopf 'Logs' 468 518 140 30
+$Knoepfe = @($btnVpn, $btnLaufwerke, $btnStatus, $btnLog)
 
 function Add-Ausgabe([string]$Text) {
     $txtAusgabe.AppendText(('{0}  {1}' -f (Get-Date -Format 'HH:mm:ss'), $Text) + "`r`n")
@@ -636,8 +576,8 @@ function Update-Status {
 
     $netz = Test-DomainErreichbar
     $zeilen += "Firmennetz ($($E.Domain)):  " + $(if ($netz) { 'erreichbar' } else { 'NICHT erreichbar - zuerst 1. VPN reparieren' })
-    $dauer = [bool](Get-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix Benutzer' -ErrorAction SilentlyContinue)
-    $zeilen += 'Dauerloesung:  ' + $(if ($dauer) { 'eingerichtet' } else { 'nicht eingerichtet' })
+    $dauer = [bool](Get-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix System' -ErrorAction SilentlyContinue)
+    $zeilen += 'Dauerloesung:  ' + $(if ($dauer) { 'eingerichtet' } else { 'nicht eingerichtet - einmal VPN-Dauerloesung.cmd ausfuehren' })
 
     $lblStatus.Text = $zeilen -join "`r`n"
     $lblStatus.ForeColor = if ($netz) { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::DarkRed }
@@ -685,7 +625,7 @@ function Invoke-AlsBenutzer([string]$Modus) {
     }
     Write-VpnFixDateien
     $position = if ($KonsolenLog -and (Test-Path $KonsolenLog)) { (Get-Item $KonsolenLog).Length } else { 0 }
-    $name = 'VPN-Fix Jetzt'
+    $name = 'VPN-Hilfe Jetzt'
     Register-ScheduledTask -TaskPath $TaskPath -TaskName $name -Force -Action (New-WorkerAktion $Modus) `
         -Principal (New-ScheduledTaskPrincipal -UserId $Konsole -LogonType Interactive -RunLevel Limited) `
         -Settings (New-AufgabenEinstellungen) | Out-Null
@@ -740,24 +680,6 @@ $btnLaufwerke.Add_Click({
     })
 
 $btnStatus.Add_Click({ Invoke-Aktion { if ($Direkt) { Show-LaufwerkStatus } } })
-
-$btnDauer.Add_Click({
-        Invoke-Aktion {
-            Add-Ausgabe '----- Dauerloesung einrichten -----'
-            if (Test-Admin) { Install-VpnFix }
-            elseif (Start-AlsAdmin 'Einrichten') { Add-Ausgabe 'Dauerloesung eingerichtet - wirkt ab jetzt bei jedem Start, jeder Anmeldung und jedem VPN-Aufbau.' }
-            else { Add-Ausgabe 'Dauerloesung konnte nicht eingerichtet werden.' }
-        }
-    })
-
-$btnEntfernen.Add_Click({
-        $antwort = [System.Windows.Forms.MessageBox]::Show('Dauerloesung (geplante Aufgaben) wirklich entfernen?', 'GHG VPN-Hilfe', 'YesNo', 'Question')
-        if ($antwort -ne 'Yes') { return }
-        Invoke-Aktion {
-            if (Test-Admin) { Uninstall-VpnFix }
-            elseif (Start-AlsAdmin 'Entfernen') { Add-Ausgabe 'Dauerloesung entfernt.' }
-        }
-    })
 
 $btnLog.Add_Click({
         $logOrdner = Split-Path $KonsolenLog

@@ -1,4 +1,44 @@
-# GHG VPN-Hilfe
+# GHG VPN-Dauerlösung und VPN-Hilfe
+
+| Datei | Wofür | Wie oft |
+|---|---|---|
+| **`VPN-Dauerloesung.cmd`** | Löst das VPN-Problem dauerhaft (auch nach Neustart) | **einmal** pro Gerät (Adminrechte) |
+| **`VPN-Hilfe.cmd`** | Fenster mit zwei Knöpfen, falls doch einmal etwas hängt | bei Bedarf |
+
+## VPN-Dauerlösung (`VPN-Dauerloesung.cmd`)
+
+Doppelklick → UAC bestätigen → **[1] Einrichten** → einmal ab- und wieder anmelden. Fertig.
+
+**Kern – das VPN:** Das VPN-Profil wird dauerhaft auf **nur SSTP** (`VPNStrategy=5`) gestellt.
+Damit hängt das VPN nicht mehr (Fehler der Windows-Updates ab September 2026), und es steht
+nach der Anmeldung viel früher – deshalb finden auch die Intune-Laufwerke die Server wieder.
+Windows oder Intune stellen den Wert manchmal zurück: Er wird bei Start, Anmeldung, alle
+15 Minuten und bei jedem VPN-Fehler geprüft und wieder auf 5 gesetzt. In Intune selbst lässt sich
+SSTP nicht fest einstellen, deshalb geschieht das lokal.
+
+**Dazu – keine roten X mehr:** Windows stellt Netzlaufwerke bei der Anmeldung nicht mehr selbst
+wieder her (`RestoreConnection = 0`). Vorher hat es das versucht, bevor das VPN stand, und die
+Laufwerke blieben „nicht verfügbar“.
+
+**Reserve – die Laufwerke:** Sobald das VPN verbunden ist, werden kaputte oder gemerkte Laufwerke
+neu verbunden und die Intune-Laufwerkszuordnung (DriveMapping) wird noch einmal ausgeführt.
+
+| Aufgabe (Aufgabenplanung `\GHG\`) | läuft als | Wann | Was |
+|---|---|---|---|
+| `VPN-Fix System` | SYSTEM | Systemstart, alle 15 Min., VPN-Fehler | VPN-Profile „alle Benutzer“ |
+| `VPN-Fix Benutzer` | Benutzer | Anmeldung, alle 15 Min., VPN-Fehler | eigenes VPN-Profil |
+| `VPN-Fix Laufwerke` | Benutzer | Anmeldung, **VPN verbunden** | Laufwerke + Intune-Zuordnung (Reserve) |
+
+- **[2] Status** zeigt Aufgaben, `RestoreConnection` und den VPN-Wert aller Benutzer.
+- **[3] Entfernen** löscht alles und stellt `RestoreConnection` zurück – erst, wenn Microsoft den
+  Fehler behoben hat. Das Original-VPN-Profil liegt als `rasphone.pbk.vor-VPN-Fix` daneben.
+- **Viele Geräte über Intune:** in `VPN-Dauerloesung.ps1` umbenennen, als Plattformskript verteilen
+  (mit Anmeldeinformationen des Benutzers: **Nein**, 64-Bit: **Ja**).
+- Einstellungen oben in der Datei: `Protokoll` (`'SSTP'`/`'IKEv2'`), `VpnName`,
+  `LaufwerkeNichtWiederherstellen`, `LaufwerkeReserve`, `Domain`, `MappingAufgaben`.
+- Logs: `C:\ProgramData\GHG\VPN-Fix\Logs\System.log`, `%LOCALAPPDATA%\GHG\Logs\VPN-Fix.log`.
+
+## VPN-Hilfe (`VPN-Hilfe.cmd`)
 
 **Eine Datei: `VPN-Hilfe.cmd`** – Doppelklick öffnet ein Fenster mit zwei Knöpfen.
 
@@ -11,8 +51,6 @@
   Kerberos-Tickets erneuern, neu verbinden).
 - Die Laufwerke werden **immer für den angemeldeten Benutzer** verbunden – auch wenn du das
   Programm mit deinem Admin-Konto startest. Oben im Fenster steht, für wen.
-- **Dauerlösung einrichten** (einmal, braucht Adminrechte): Danach passiert das automatisch bei
-  jedem Start, jeder Anmeldung, jedem VPN-Aufbau und alle 15 Minuten – auch nach Neustart.
 - **Logs** öffnet `%LOCALAPPDATA%\GHG\Logs` (Datei `VPN-Fix.log`).
 
 ## Warum die Laufwerke mit SSTP nicht kommen – einfach erklärt
@@ -43,25 +81,9 @@ deshalb prüft die Dauerlösung ihn alle 15 Minuten. Das Original wird einmalig 
 `rasphone.pbk.vor-VPN-Fix` gesichert.
 
 Dauerhaft lässt sich das nur im Intune-VPN-Profil lösen, oder wenn Microsoft den Fehler behebt.
-Danach: **Dauerlösung entfernen**.
+Danach: `VPN-Dauerloesung.cmd` → **[3] Entfernen**.
 
-## Dauerlösung im Detail
-
-Aufgabenplanung, Ordner `\GHG\`:
-
-| Aufgabe | läuft als | Wann | Was |
-|---|---|---|---|
-| `VPN-Fix System` | SYSTEM | Systemstart, alle 15 Min., VPN-Fehler | VPN-Profile „alle Benutzer“ auf festes Protokoll |
-| `VPN-Fix Benutzer` | angemeldeter Benutzer | Anmeldung, **VPN verbunden**, Netzwerkwechsel | VPN-Profil, auf Firmennetz warten, Laufwerke, Intune-Zuordnung, Drucker |
-| `VPN-Fix Pruefung` | angemeldeter Benutzer | alle 15 Min., VPN-Fehler | VPN-Profil erneut korrigieren, Laufwerke prüfen |
-
-Skripte liegen in `C:\ProgramData\GHG\VPN-Fix` (nur Admins/SYSTEM dürfen schreiben).
-
-**Für viele Geräte über Intune:** `VPN-Hilfe.cmd` in `VPN-Hilfe.ps1` umbenennen und als
-Plattformskript verteilen (mit Anmeldeinformationen des Benutzers: **Nein**, 64-Bit: **Ja**) – richtet
-die Dauerlösung dann ohne Fenster ein.
-
-## Einstellungen (oben in der Datei, mit Editor öffnen)
+## Einstellungen von `VPN-Hilfe.cmd` (oben in der Datei)
 
 | Einstellung | Bedeutung |
 |---|---|
