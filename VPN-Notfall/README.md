@@ -1,4 +1,4 @@
-# VPN-Notfall
+# VPN-Notfall und VPN-Dauerlösung
 
 **Eine Datei: `VPN-Notfall.cmd`** – bei VPN- oder Laufwerksproblemen doppelklicken.
 Nicht „Als Administrator ausführen“ (sonst sieht der Explorer die Laufwerke nicht);
@@ -29,6 +29,30 @@ Danach zeigt es das Ergebnis und bietet an:
 ```
 
 Protokoll jeder Ausführung: `%LOCALAPPDATA%\GHG\Logs\VPN-Notfall_<Datum>.txt`
+
+## Dauerlösung: `VPN-Dauerloesung.cmd`
+
+**Einmal ausführen**, danach läuft alles automatisch, auch nach jedem Neustart.
+Doppelklick → UAC bestätigen → **[1] Einrichten**. Danach einmal ab- und wieder anmelden.
+
+Es legt in der Aufgabenplanung unter `\GHG\` drei Aufgaben an:
+
+| Aufgabe | läuft als | Wann | Was |
+|---|---|---|---|
+| `VPN-Fix System` | SYSTEM | Systemstart, alle 15 Min., VPN-Fehler (RasClient 20227) | VPN-Profile „alle Benutzer“ auf festes Protokoll |
+| `VPN-Fix Benutzer` | angemeldeter Benutzer | Anmeldung, VPN verbunden (RasClient 20225), Netzwerkwechsel | eigenes VPN-Profil korrigieren, auf Firmennetz warten, getrennte Laufwerke neu verbinden, Intune-Laufwerkszuordnung ausführen, Drucker |
+| `VPN-Fix Pruefung` | angemeldeter Benutzer | alle 15 Min., VPN-Fehler | VPN-Profil erneut korrigieren (Windows/Intune setzen es nach einem Fallback zurück), Laufwerke prüfen |
+
+- Festes Protokoll: `Protokoll = 'SSTP'` (5) oder `'IKEv2'` (7), oben in der Datei.
+  Profile, die schon auf genau einem Protokoll stehen (z.B. Device-Tunnel = 7), bleiben unverändert.
+- Der Originalzustand wird einmalig als `rasphone.pbk.vor-VPN-Fix` gesichert.
+- Die Skripte liegen in `C:\ProgramData\GHG\VPN-Fix` (nur Admins/SYSTEM dürfen schreiben).
+- Logs: `C:\ProgramData\GHG\VPN-Fix\Logs\System.log` und `%LOCALAPPDATA%\GHG\Logs\VPN-Fix.log`.
+- **[2] Status** zeigt Aufgaben, VPNStrategy aller Benutzer und das Log, **[3] Entfernen** löscht alles wieder.
+- **Intune:** Datei in `VPN-Dauerloesung.ps1` umbenennen und als Plattformskript verteilen
+  (mit Anmeldeinformationen des Benutzers: Nein, 64-Bit: Ja) – richtet dann ohne Rückfrage ein.
+- Wenn Microsoft den Fehler wirklich behoben hat: **[3] Entfernen**, danach das Protokoll mit
+  `VPN-Notfall.cmd` → [3] → Automatisch zurückstellen.
 
 ## Einstellungen (oben in der Datei, mit Editor öffnen)
 
