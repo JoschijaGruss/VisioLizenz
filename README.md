@@ -109,5 +109,6 @@ einchecken und nicht weitergeben (`configuration*.xml` ist in `.gitignore` einge
 
 ## Weitere Tools in diesem Repository
 
-- [`VPN-Notfall/VPN-Notfall.cmd`](VPN-Notfall/README.md) – eine Datei zum Doppelklicken: Always On VPN reparieren (Workaround für die
-  Windows-11-Updates ab September 2026), Netzlaufwerke, Intune-Zuordnung und Drucker neu verbinden.
+- [`VPN-Notfall/VPN-Hilfe.cmd`](VPN-Notfall/README.md) – Fenster mit zwei Knöpfen: Always On VPN reparieren
+  (Workaround für die Windows-11-Updates ab September 2026) und Laufwerke/Drucker für den angemeldeten
+  Benutzer verbinden; optional als Dauerlösung über geplante Aufgaben.
