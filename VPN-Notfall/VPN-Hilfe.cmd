@@ -6,19 +6,30 @@ exit /b
 #>
 
 ###########################################################################################
-# GHG VPN-Hilfe - Doppelklick oeffnet ein Fenster mit zwei Knoepfen:
+# GHG VPN-Hilfe - eine Datei fuer alles. Doppelklick oeffnet ein Fenster:
 #
-#   1. VPN reparieren       VPN-Profil auf festes Protokoll (SSTP) stellen, VPN neu verbinden,
-#                           danach automatisch die Laufwerke verbinden
-#   2. Laufwerke verbinden  getrennte Laufwerke neu verbinden, Intune-Laufwerkszuordnung
-#                           ausfuehren, Drucker verbinden
+#   1. VPN reparieren         VPN-Profil auf festes Protokoll (SSTP) stellen, VPN neu verbinden,
+#                             danach automatisch die Laufwerke verbinden
+#   2. Laufwerke verbinden    getrennte Laufwerke neu verbinden, Intune-Laufwerkszuordnung
+#                             ausfuehren, Drucker verbinden
+#   Dauerloesung einrichten   EINMAL pro Geraet: danach passiert das automatisch, auch nach Neustart
 #
-# Die Laufwerke werden IMMER fuer den angemeldeten Benutzer verbunden - auch wenn das
-# Programm mit einem Admin-Konto gestartet wurde (dann ueber eine kurzzeitige Aufgabe).
+# Hintergrund: Seit KB5124008 / KB5124012 haengt Always On VPN, wenn das Profil zwischen IKEv2
+# und SSTP wechseln darf (VPNStrategy 0, 6, 8, 14). Mit festem SSTP (5) haengt es nicht mehr und
+# steht nach der Anmeldung frueher - dann finden auch die Intune-Laufwerke die Server.
 #
-# Damit es gar nicht erst passiert: einmal VPN-Dauerloesung.cmd ausfuehren (geplante Aufgaben).
+# Dauerloesung = geplante Aufgaben (Aufgabenplanung, Ordner \GHG\):
+#   VPN-Fix System     SYSTEM     Systemstart, alle 15 Min., VPN-Fehler -> VPN-Profile "alle Benutzer"
+#   VPN-Fix Benutzer   Benutzer   Anmeldung, alle 15 Min., VPN-Fehler   -> eigenes VPN-Profil
+#   VPN-Fix Laufwerke  Benutzer   Anmeldung, VPN verbunden              -> Laufwerke (Reserve)
+# und RestoreConnection = 0: Windows stellt Laufwerke nicht mehr vor dem VPN wieder her (keine roten X).
 #
-# Log: %LOCALAPPDATA%\GHG\Logs\VPN-Fix.log
+# Laufwerke werden IMMER fuer den angemeldeten Benutzer verbunden - auch wenn das Fenster mit
+# einem Admin-Konto gestartet wurde (dann ueber eine kurzzeitige Aufgabe als dieser Benutzer).
+#
+# Intune: in VPN-Hilfe.ps1 umbenennen, als Plattformskript verteilen (als SYSTEM, 64-Bit) -
+#         richtet dann die Dauerloesung ohne Fenster ein.
+# Logs:   %LOCALAPPDATA%\GHG\Logs\VPN-Fix.log, C:\ProgramData\GHG\VPN-Fix\Logs\System.log
 ###########################################################################################
 
 ###########################################################################################
@@ -27,51 +38,56 @@ exit /b
 
 $Einstellungen = [ordered]@{
     # Nur dieses VPN-Profil bearbeiten, leer = alle VPN-Profile
-    VpnName              = ''
-    # Festes Protokoll: 'SSTP' (5) oder 'IKEv2' (7)
-    Protokoll            = 'SSTP'
+    VpnName                        = ''
+    # Festes Protokoll: 'SSTP' (5, funktioniert bei euch) oder 'IKEv2' (7)
+    Protokoll                      = 'SSTP'
+    # Dauerloesung: Windows soll Laufwerke bei der Anmeldung nicht selbst wiederherstellen
+    LaufwerkeNichtWiederherstellen = $true
+    # Dauerloesung: nach dem VPN-Aufbau Laufwerke pruefen und Intune-Zuordnung ausfuehren
+    LaufwerkeReserve               = $true
     # AD-Domain - daran wird erkannt, ob das Firmennetz (VPN) erreichbar ist
-    Domain               = 'ghg.local'
+    Domain                         = 'ghg.local'
     # So lange wird nach Anmeldung/VPN-Aufbau auf das Firmennetz gewartet
-    WartenSekunden       = 120
+    WartenSekunden                 = 120
     # Geplante Aufgaben der Intune-Laufwerkszuordnung, deren Skript ausgefuehrt wird
-    MappingAufgaben      = @('*DriveMapping*', '*PrinterMapping*')
+    MappingAufgaben                = @('*DriveMapping*', '*PrinterMapping*')
     # Laufwerke, die immer verbunden werden sollen (zusaetzlich zur Intune-Zuordnung), z.B.
     #   @{ Buchstabe = 'S'; Pfad = '\\server.ghg.local\Daten' }
-    ZusatzLaufwerke      = @()
+    ZusatzLaufwerke                = @()
     # Drucker aus den AD-Druckergruppen verbinden
-    DruckerVerbinden     = $true
-    PrintServer          = '\\scghgpsv01.ghg.local'
-    PrinterGroupPrefixes = @(
+    DruckerVerbinden               = $true
+    PrintServer                    = '\\scghgpsv01.ghg.local'
+    PrinterGroupPrefixes           = @(
         'GHG_BR_', 'CP_A_', 'CP_B_', 'CP_C_', 'CP_D_', 'CP_E_', 'GHG_GE_', 'GHG_MA_', 'GHG_RO_', 'GHGP',
         'GHG_TE_', 'GHG_RI_', 'GHG-GE-PR', 'GHG-CP-PR', 'GHG-HP-PR', 'GHG-SO-PR', 'GHG-TE-PR',
         'GHG-RI-PR', 'GHG-BR-PR', 'GHG-RO-PR', 'GHG-MA-PR'
     )
 }
 
-$Ordner   = Join-Path $env:ProgramData 'GHG\VPN-Hilfe'
-$TaskPath = '\GHG\'
+$Ordner           = Join-Path $env:ProgramData 'GHG\VPN-Fix'
+$TaskPath         = '\GHG\'
+$NetzwerkProvider = 'HKLM:\SYSTEM\CurrentControlSet\Control\NetworkProvider'
 
 ###########################################################################################
-# Funktionen fuer das Fenster. Laeuft das Fenster als Admin, wird das Skript nach
-# C:\ProgramData\GHG\VPN-Hilfe\VPN-Fix.ps1 geschrieben und als angemeldeter Benutzer ausgefuehrt.
+# Skript fuer die geplanten Aufgaben (wird nach C:\ProgramData\GHG\VPN-Fix\VPN-Fix.ps1
+# geschrieben). Das Fenster benutzt dieselben Funktionen.
 ###########################################################################################
 
 $WorkerCode = @'
 <#
-    GHG VPN-Hilfe - Schritte des Fensters VPN-Hilfe.cmd (als angemeldeter Benutzer)
+    GHG VPN-Fix - ausgefuehrt von den geplanten Aufgaben \GHG\VPN-Fix * und vom Fenster VPN-Hilfe.cmd
     -Modus System        VPN-Profile "alle Benutzer" (ProgramData) auf festes Protokoll
-    -Modus Pruefung      eigenes VPN-Profil korrigieren, Laufwerke pruefen (nur wenn Firmennetz da)
-    -Modus Benutzer      eigenes VPN-Profil, auf Firmennetz warten, Laufwerke, Intune-Zuordnung, Drucker
-    -Modus VpnNeu        wie Benutzer, VPN vorher neu verbinden
-    -Modus LaufwerkeNeu  wie Benutzer, alle Laufwerke vorher trennen und Kerberos-Tickets erneuern
+    -Modus Vpn           eigenes VPN-Profil auf festes Protokoll
+    -Modus Laufwerke     eigenes VPN-Profil, auf Firmennetz warten, Laufwerke, Intune-Zuordnung, Drucker
+    -Modus VpnNeu        wie Laufwerke, VPN vorher neu verbinden (Knopf 1)
+    -Modus LaufwerkeNeu  wie Laufwerke, alle Laufwerke vorher trennen, Kerberos-Tickets erneuern
 #>
 param(
-    [ValidateSet('System', 'Pruefung', 'Benutzer', 'VpnNeu', 'LaufwerkeNeu')][string]$Modus = 'Benutzer',
+    [ValidateSet('System', 'Vpn', 'Laufwerke', 'VpnNeu', 'LaufwerkeNeu', 'Benutzer', 'Pruefung')][string]$Modus = 'Vpn',
     [switch]$NurLaden
 )
 
-$Ordner      = Join-Path $env:ProgramData 'GHG\VPN-Hilfe'
+$Ordner      = Join-Path $env:ProgramData 'GHG\VPN-Fix'
 $PbkAlle     = Join-Path $env:ProgramData 'Microsoft\Network\Connections\Pbk\rasphone.pbk'
 $PbkBenutzer = Join-Path $env:APPDATA 'Microsoft\Network\Connections\Pbk\rasphone.pbk'
 
@@ -251,18 +267,34 @@ function Connect-NetzLaufwerk([string]$Laufwerk, [string]$Pfad, [string]$Vorher 
     Write-Log "$Laufwerk -> $Pfad FEHLER: $text"
 }
 
-function Repair-Laufwerke {
-    # Getrennte / "nicht verfuegbare" Laufwerke mit demselben Pfad neu verbinden
+function Get-LaufwerkListe {
+    # Verbundene/getrennte Laufwerke plus gemerkte (HKCU\Network), die Windows nicht wiederhergestellt hat
+    $liste = [ordered]@{}
     foreach ($z in @(Get-SmbMapping -ErrorAction SilentlyContinue | Where-Object { $_.LocalPath })) {
-        $pfad = $z.RemotePath.TrimEnd('\')
-        if ($z.Status -eq 'OK' -and (Test-Port (Get-ServerAusPfad $pfad) 445) -and (Test-Path -LiteralPath "$($z.LocalPath)\")) { continue }
-        if (-not (Test-UncPfad $pfad)) { Write-Log "$($z.LocalPath) -> $pfad nicht erreichbar, bleibt unveraendert."; continue }
-        Connect-NetzLaufwerk $z.LocalPath $pfad " (war: $($z.Status))"
+        $liste[$z.LocalPath.ToUpper()] = [pscustomobject]@{ Pfad = $z.RemotePath.TrimEnd('\'); Status = [string]$z.Status }
+    }
+    foreach ($eintrag in @(Get-ChildItem 'HKCU:\Network' -ErrorAction SilentlyContinue)) {
+        $lw = "$($eintrag.PSChildName.ToUpper()):"
+        $pfad = (Get-ItemProperty -LiteralPath $eintrag.PSPath -ErrorAction SilentlyContinue).RemotePath
+        if ($pfad -and -not $liste.Contains($lw)) { $liste[$lw] = [pscustomobject]@{ Pfad = $pfad.TrimEnd('\'); Status = 'gemerkt' } }
+    }
+    $liste
+}
+
+function Repair-Laufwerke {
+    # Getrennte / "nicht verfuegbare" / gemerkte Laufwerke mit demselben Pfad neu verbinden
+    $liste = Get-LaufwerkListe
+    foreach ($lw in @($liste.Keys)) {
+        $pfad = $liste[$lw].Pfad
+        $status = $liste[$lw].Status
+        if ($status -eq 'OK' -and (Test-Port (Get-ServerAusPfad $pfad) 445) -and (Test-Path -LiteralPath "$lw\")) { continue }
+        if (-not (Test-UncPfad $pfad)) { Write-Log "$lw -> $pfad nicht erreichbar, bleibt unveraendert."; continue }
+        Connect-NetzLaufwerk $lw $pfad " (war: $status)"
     }
     foreach ($soll in @($E.ZusatzLaufwerke)) {
         if (-not $soll) { continue }
         $lw = "$(([string]$soll.Buchstabe).Trim().TrimEnd(':').ToUpper()):"
-        if (Get-SmbMapping -LocalPath $lw -ErrorAction SilentlyContinue) { continue }
+        if ($liste.Contains($lw)) { continue }
         if (Test-UncPfad $soll.Pfad) { Connect-NetzLaufwerk $lw ([string]$soll.Pfad).TrimEnd('\') }
         else { Write-Log "$lw -> $($soll.Pfad) nicht erreichbar." }
     }
@@ -270,18 +302,17 @@ function Repair-Laufwerke {
 
 function Reset-Laufwerke {
     # Alles trennen, Kerberos-Tickets erneuern, dieselben Laufwerke wieder verbinden
-    $liste = @(Get-SmbMapping -ErrorAction SilentlyContinue | Where-Object { $_.LocalPath } |
-            ForEach-Object { [pscustomobject]@{ Laufwerk = $_.LocalPath; Pfad = $_.RemotePath.TrimEnd('\') } })
+    $liste = Get-LaufwerkListe
     $null = cmd.exe /c 'net use * /delete /y 2>&1'
     $null = klist.exe purge
     $null = ipconfig.exe /flushdns
     Write-Log 'Alle Laufwerke getrennt, Kerberos-Tickets und DNS-Cache geleert.'
-    foreach ($l in $liste) { Connect-NetzLaufwerk $l.Laufwerk $l.Pfad }
+    foreach ($lw in @($liste.Keys)) { Connect-NetzLaufwerk $lw $liste[$lw].Pfad }
     Repair-Laufwerke
 }
 
 function Invoke-IntuneMapping {
-    # Skript der Intune-Zuordnungsaufgaben als dieser Benutzer ausfuehren (jetzt ist das VPN da)
+    # Skript der Intune-Zuordnungsaufgaben als dieser Benutzer ausfuehren - jetzt ist das VPN da
     $aufgaben = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
             $name = $_.TaskName
             @($E.MappingAufgaben | Where-Object { $name -like $_ }).Count -gt 0
@@ -373,12 +404,11 @@ function Connect-Drucker {
 function Invoke-Modus([string]$Modus) {
     switch ($Modus) {
         'System' { $null = Repair-Pbk $PbkAlle }
-        'Pruefung' {
+        { $_ -in 'Vpn', 'Pruefung' } {
             # Nur neu verbinden, wenn das Profil korrigiert wurde (im Buero trennt Always On das VPN absichtlich)
             if (@(Repair-Pbk $PbkBenutzer).Count -gt 0) { Connect-BenutzerVpn }
-            if (Test-DomainErreichbar) { Repair-Laufwerke }
         }
-        default {
+        { $_ -in 'Laufwerke', 'Benutzer', 'VpnNeu', 'LaufwerkeNeu' } {
             $geaendert = @(Repair-Pbk $PbkBenutzer)
             if ($Modus -eq 'VpnNeu') {
                 if ($geaendert -or -not (Test-DomainErreichbar)) { Connect-BenutzerVpn -Immer }
@@ -414,6 +444,15 @@ function Test-Admin {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function New-EreignisTrigger([string]$Log, [string]$Quelle, [int]$Id, [string]$Verzoegerung = 'PT5S') {
+    $klasse = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler
+    $trigger = New-CimInstance -CimClass $klasse -ClientOnly
+    $trigger.Enabled = $true
+    $trigger.Delay = $Verzoegerung
+    $trigger.Subscription = "<QueryList><Query Id=`"0`" Path=`"$Log`"><Select Path=`"$Log`">*[System[Provider[@Name='$Quelle'] and EventID=$Id]]</Select></Query></QueryList>"
+    $trigger
+}
+
 function New-WorkerAktion([string]$Modus, [switch]$System) {
     $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $argumente = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $Ordner 'VPN-Fix.ps1')`" -Modus $Modus"
@@ -438,15 +477,86 @@ function Write-VpnFixDateien {
     $Einstellungen | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $Ordner 'Einstellungen.json') -Encoding ASCII
 }
 
+function Remove-Aufgaben {
+    Get-ScheduledTask -TaskPath $TaskPath -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'VPN-Fix*' } |
+        Unregister-ScheduledTask -Confirm:$false
+}
+
+function Install-VpnFix {
+    Remove-Aufgaben
+    Write-VpnFixDateien
+
+    # Laufwerke bei der Anmeldung nicht wiederherstellen (alter Wert wird fuer "Entfernen" gemerkt)
+    if ($Einstellungen.LaufwerkeNichtWiederherstellen) {
+        $vorherDatei = Join-Path $Ordner 'RestoreConnection-vorher.txt'
+        if (-not (Test-Path $vorherDatei)) {
+            $vorher = (Get-ItemProperty $NetzwerkProvider -ErrorAction SilentlyContinue).RestoreConnection
+            Set-Content -LiteralPath $vorherDatei -Value ([string]$vorher) -Encoding ASCII
+        }
+        Set-ItemProperty -Path $NetzwerkProvider -Name RestoreConnection -Value 0 -Type DWord
+    }
+
+    $einstellungen = New-AufgabenEinstellungen
+    $benutzer = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
+    $alle15 = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 15)
+    $vpnFehler = New-EreignisTrigger 'Application' 'RasClient' 20227
+
+    # SYSTEM: VPN-Profile "alle Benutzer" - Systemstart, alle 15 Minuten, VPN-Fehler
+    Register-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix System' -Force -Action (New-WorkerAktion System -System) `
+        -Trigger @((New-ScheduledTaskTrigger -AtStartup), $alle15, $vpnFehler) `
+        -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest) `
+        -Settings $einstellungen | Out-Null
+
+    # Benutzer: eigenes VPN-Profil - Anmeldung (danach alle 15 Minuten) und VPN-Fehler
+    $anmeldung = New-ScheduledTaskTrigger -AtLogOn
+    $anmeldung.Repetition = $alle15.Repetition
+    Register-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix Benutzer' -Force -Action (New-WorkerAktion Vpn) `
+        -Trigger @($anmeldung, $vpnFehler) -Principal $benutzer -Settings $einstellungen | Out-Null
+
+    # Benutzer: Laufwerke als Reserve - Anmeldung und sobald das VPN verbunden ist
+    if ($Einstellungen.LaufwerkeReserve) {
+        $spaeter = New-ScheduledTaskTrigger -AtLogOn
+        $spaeter.Delay = 'PT30S'
+        Register-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix Laufwerke' -Force -Action (New-WorkerAktion Laufwerke) `
+            -Trigger @($spaeter, (New-EreignisTrigger 'Application' 'RasClient' 20225 'PT10S')) `
+            -Principal $benutzer -Settings $einstellungen | Out-Null
+    }
+
+    Start-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix System' -ErrorAction SilentlyContinue
+    Start-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix Benutzer' -ErrorAction SilentlyContinue
+    Write-Log "Dauerloesung eingerichtet ($Ordner, Aufgaben $($TaskPath)VPN-Fix *)."
+}
+
+function Uninstall-VpnFix {
+    Remove-Aufgaben
+    # RestoreConnection auf den Wert vor der Einrichtung zuruecksetzen
+    $vorherDatei = Join-Path $Ordner 'RestoreConnection-vorher.txt'
+    if (Test-Path $vorherDatei) {
+        $vorher = (Get-Content -LiteralPath $vorherDatei -Raw).Trim()
+        if ($vorher -match '^\d+$') { Set-ItemProperty -Path $NetzwerkProvider -Name RestoreConnection -Value ([int]$vorher) -Type DWord }
+        else { Remove-ItemProperty -Path $NetzwerkProvider -Name RestoreConnection -ErrorAction SilentlyContinue }
+    }
+    Remove-Item -LiteralPath $Ordner -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Log 'Dauerloesung entfernt. VPN-Profile bleiben auf dem festen Protokoll (Original: rasphone.pbk.vor-VPN-Fix).'
+}
+
 ###########################################################################################
-# Start ohne Fenster: Teilschritt mit Adminrechten
+# Start ohne Fenster: Intune (SYSTEM) und Teilschritte mit Adminrechten
 ###########################################################################################
+
+$IstSystem = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18'
+if ($IstSystem) {
+    try { Install-VpnFix; exit 0 }
+    catch { Write-Output "Einrichtung fehlgeschlagen: $($_.Exception.Message)"; exit 1 }
+}
 
 if ($env:VPN_HILFE_AKTION) {
     $ok = $true
     try {
         switch ($env:VPN_HILFE_AKTION) {
-            'PbkAlle' { $null = Repair-Pbk $PbkAlle }
+            'PbkAlle'    { $null = Repair-Pbk $PbkAlle }
+            'Einrichten' { Install-VpnFix }
+            'Entfernen'  { Uninstall-VpnFix }
         }
     }
     catch { Write-Log "FEHLER: $($_.Exception.Message)"; $ok = $false }
@@ -545,9 +655,11 @@ $txtAusgabe.Location = New-Object System.Drawing.Point(16, 294)
 $txtAusgabe.Size = New-Object System.Drawing.Size(592, 214)
 $form.Controls.Add($txtAusgabe)
 
-$btnStatus = New-Knopf 'Aktualisieren' 16 518 140 30
-$btnLog = New-Knopf 'Logs' 468 518 140 30
-$Knoepfe = @($btnVpn, $btnLaufwerke, $btnStatus, $btnLog)
+$btnStatus = New-Knopf 'Aktualisieren' 16 518 120 30
+$btnDauer = New-Knopf 'Dauerloesung einrichten' 144 518 190 30
+$btnEntfernen = New-Knopf 'Dauerloesung entfernen' 342 518 180 30
+$btnLog = New-Knopf 'Logs' 530 518 78 30
+$Knoepfe = @($btnVpn, $btnLaufwerke, $btnStatus, $btnDauer, $btnEntfernen, $btnLog)
 
 function Add-Ausgabe([string]$Text) {
     $txtAusgabe.AppendText(('{0}  {1}' -f (Get-Date -Format 'HH:mm:ss'), $Text) + "`r`n")
@@ -577,7 +689,7 @@ function Update-Status {
     $netz = Test-DomainErreichbar
     $zeilen += "Firmennetz ($($E.Domain)):  " + $(if ($netz) { 'erreichbar' } else { 'NICHT erreichbar - zuerst 1. VPN reparieren' })
     $dauer = [bool](Get-ScheduledTask -TaskPath $TaskPath -TaskName 'VPN-Fix System' -ErrorAction SilentlyContinue)
-    $zeilen += 'Dauerloesung:  ' + $(if ($dauer) { 'eingerichtet' } else { 'nicht eingerichtet - einmal VPN-Dauerloesung.cmd ausfuehren' })
+    $zeilen += 'Dauerloesung:  ' + $(if ($dauer) { 'eingerichtet' } else { 'nicht eingerichtet - unten "Dauerloesung einrichten"' })
 
     $lblStatus.Text = $zeilen -join "`r`n"
     $lblStatus.ForeColor = if ($netz) { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::DarkRed }
@@ -674,12 +786,34 @@ $btnVpn.Add_Click({
 $btnLaufwerke.Add_Click({
         Invoke-Aktion {
             Add-Ausgabe '----- Laufwerke verbinden -----'
-            if ($chkNeu.Checked) { Start-Modus 'LaufwerkeNeu' } else { Start-Modus 'Benutzer' }
+            if ($chkNeu.Checked) { Start-Modus 'LaufwerkeNeu' } else { Start-Modus 'Laufwerke' }
             Add-Ausgabe '----- fertig -----'
         }
     })
 
 $btnStatus.Add_Click({ Invoke-Aktion { if ($Direkt) { Show-LaufwerkStatus } } })
+
+$btnDauer.Add_Click({
+        Invoke-Aktion {
+            Add-Ausgabe '----- Dauerloesung einrichten -----'
+            if (Test-Admin) { Install-VpnFix; $ok = $true } else { $ok = Start-AlsAdmin 'Einrichten' }
+            if ($ok) {
+                Add-Ausgabe 'Eingerichtet: VPN fest auf SSTP, geprueft bei Start, Anmeldung, alle 15 Min. und bei VPN-Fehlern.'
+                Add-Ausgabe 'Windows stellt Laufwerke nicht mehr vor dem VPN wieder her; nach dem VPN-Aufbau werden sie verbunden.'
+                Add-Ausgabe 'Jetzt einmal ab- und wieder anmelden - danach laeuft alles automatisch.'
+            }
+            else { Add-Ausgabe 'Dauerloesung konnte nicht eingerichtet werden.' }
+        }
+    })
+
+$btnEntfernen.Add_Click({
+        $antwort = [System.Windows.Forms.MessageBox]::Show('Dauerloesung wirklich entfernen? (erst wenn Microsoft den VPN-Fehler behoben hat)', 'GHG VPN-Hilfe', 'YesNo', 'Question')
+        if ($antwort -ne 'Yes') { return }
+        Invoke-Aktion {
+            if (Test-Admin) { Uninstall-VpnFix; $ok = $true } else { $ok = Start-AlsAdmin 'Entfernen' }
+            if ($ok) { Add-Ausgabe 'Dauerloesung entfernt, RestoreConnection zurueckgesetzt. VPN-Profil bleibt auf SSTP.' }
+        }
+    })
 
 $btnLog.Add_Click({
         $logOrdner = Split-Path $KonsolenLog

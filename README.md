@@ -109,6 +109,6 @@ einchecken und nicht weitergeben (`configuration*.xml` ist in `.gitignore` einge
 
 ## Weitere Tools in diesem Repository
 
-- [`VPN-Notfall/`](VPN-Notfall/README.md) – Always On VPN (Fehler der Windows-11-Updates ab September 2026):
-  `VPN-Dauerloesung.cmd` löst es einmalig und dauerhaft, `VPN-Hilfe.cmd` ist ein Fenster mit
-  „VPN reparieren“ und „Laufwerke verbinden“ für den angemeldeten Benutzer.
+- [`VPN-Notfall/VPN-Hilfe.cmd`](VPN-Notfall/README.md) – eine Datei mit Fenster: Always On VPN dauerhaft
+  reparieren (Fehler der Windows-11-Updates ab September 2026) und Laufwerke/Drucker für den
+  angemeldeten Benutzer verbinden.
